@@ -3,17 +3,23 @@ BCPU16
 
 This is small but powerful MCU softcore for using inside FPGA.
 
-RISC architecture, LOAD/STORE
-Fixed instruction width 16 bits
-8 general purpose 16-bit registers
-3-address ALU operations
-4-stage pipeline executing 4 threads (barrel CPU)
-Up to 64K x 16bit words of program/data address space
-Up to 128 bits of input and 128 bits ouput bus, atomic bit-masked access as 16-bit slices
-Special wait instructions to react on input signal change in one cycle - emulation of interrupts
+**Language: System Verilog**
+**License: GNU LGPL V2**
+**Platform: Xilinx Series 7 FPGA, but may be ported to other platforms**
 
-Language: System Verilog
-License: GNU LGPL V2
+**Main features:**
+
+* RISC architecture, LOAD/STORE
+* Fixed instruction width 16 bits
+* 8 general purpose 16-bit registers
+* 3-address ALU operations to reduce register-register moves
+* 4-stage pipeline executing 4 threads (barrel CPU)
+* Up to 64K x 16bit words of program/data address space
+* Up to 128 bits of input and 128 bits ouput bus, atomic bit-masked access as 16-bit slices
+* Special wait instructions to react on input signal change in one cycle - emulation of interrupts
+* Low resource usage: Only 150 LUTs + 1 BRAM + 1 DSP on Xilinx Series 7 platform
+* High performance: 260 MHz clock (65MHz x 4 threads) on Xilinx Series 7 FPGAs with speed grade -1
+
 
 
 BCPU16 instruction set architecture
@@ -25,8 +31,8 @@ Registers
 ---------
 
 8 x 16bit general purpose registers R0..R7
-R0 is readonly constant 0, writes ignored
-R7 is set to return address when CALL instruction is executed (acts as link register)
+*R0* is readonly constant 0, writes ignored
+*R7* is set to return address when CALL instruction is executed (acts as link register)
 Registers encoded inside instructions as 3-bit indexes (aaa,bbb,ddd)
 
 Program counter register PC, configurable width (10..16 bits)
@@ -40,6 +46,9 @@ Flags register: 4 flags
 | S    | sign                          |
 | V    | signed arithmetic overflow    |
 
+For 4-threaded barrel mode, 4 copies of all registers, flags and PC are needed - one per thread.
+
+
 Instruction types
 -----------------
 
@@ -47,7 +56,7 @@ Instruction types
 |------------------|-------------|------------------------|---------------|
 | ALU instructions | Arithmetic, logic, multiplication, barrel shifter emulated by multiplication | 12 | 3-address: destination register, operand A register, operand B register or immediate constant |
 | LOAD/STORE | Load from memory to register, store register to memory | 2 | register + 5-bit signed offset, PC + 8-bit signed offset |
-| Conditional jumps | Conditional jump based on flags (16 combinations) | 1 | register + 5-bit signed offset, PC + 8-bit signed offset |
+| Conditional jumps/returns | Conditional jump based on flags (16 combinations) | 1 | register + 5-bit signed offset, PC + 8-bit signed offset |
 | JUMP and CALL | Jump relative to PC, for CALL stores return address in R7 (link register) | 2 | PC + 13-bit signed offset |
 | I/O BUS instructions | Write output bus bits, read input bus bits, wait for 0 or 1 on input bus | 3 | Bus address is 3 bits (8 16-bit slices) |
 
@@ -55,33 +64,33 @@ Instruction types
 Instructions table
 ------------------
 
-| instruction code      | assembler          |  description                              | flags |
-|-----------------------|--------------------|-------------------------------------------|-------|
-| 0_0000_aaa_bbb_mm_ddd | INC Rd, Ra, B      |  Rd = Rn + B                              | ----  |
-| 0_0001_aaa_bbb_mm_ddd | DEC Rd, Ra, B      |  Rd = Rn - B                              | ----  |
-| 0_0010_000_bbb_mm_iii | WAIT B, i3         |  Wait until ((IBUS[i3] & B) == 0) == ZF   | ----  |
-| 0_0010_ddd_bbb_mm_iii | IN Rd, B, i3       |  Rd = IBUS[i3] & B, *(ddd != 000)*        | --Z-  |
-| 0_0011_aaa_bbb_mm_iii | OUT Ra, B, i3      |  IBUS[i3] = (IBUS[i3] & ~B)\|(Ra & B)     | ----  |
-| 0_0100_aaa_bbb_mm_ddd | ADD Rd, Ra, B      |  Rd = Rn + B                              | VSZC  |
-| 0_0101_aaa_bbb_mm_ddd | ADC Rd, Ra, B      |  Rd = Rn + B + C                          | VSZC  |
-| 0_0110_aaa_bbb_mm_ddd | SUB Rd, Ra, B      |  Rd = Rn - B                              | VSZC  |
-| 0_0111_aaa_bbb_mm_ddd | SBC Rd, Ra, B      |  Rd = Rn - B + 1 - C                      | VSZC  |
-| 0_1000_aaa_bbb_mm_ddd | AND Rd, Ra, B      |  Rd = Rn & B                              | -SZ-  |
-| 0_1001_aaa_bbb_mm_ddd | ANN Rd, Ra, B      |  Rd = Rn & ~B                             | -SZ-  |
-| 0_1010_aaa_bbb_mm_ddd | OR  Rd, Ra, B      |  Rd = Rn \| B                             | -SZ-  |
-| 0_1011_aaa_bbb_mm_ddd | XOR Rd, Ra, B      |  Rd = Rn ^ B                              | -SZ-  |
-| 0_1100_aaa_bbb_mm_ddd | MUU Rd, Ra, B      |  Rd = ((unsigned)Rn * (unsigned)B) >> 16  | -SZC  |
-| 0_1101_aaa_bbb_mm_ddd | MUL Rd, Ra, B      |  Rd = (Rn * B) >> 0                       | -SZC  |
-| 0_1110_aaa_bbb_mm_ddd | MSU Rd, Ra, B      |  Rd = ((signed)Rn * (unsigned)B) >> 16    | -SZC  |
-| 0_1111_aaa_bbb_mm_ddd | MSS Rd, Ra, B      |  Rd = ((signed)Rn * (signed)B) >> 16      | -SZC  |
-| 1_0000_ddd_bbb_ii_iii | LOAD Rd, Rb+imm5   |  Rd = memory[Rb+imm5]                     | ----  |
-| 1_0001_aaa_bbb_ii_iii | STORE Ra, Rb+imm5  |  memory[Rb+imm5] = Ra                     | ----  |
-| 1_0010_ddd_iii_ii_iii | LOAD Rd, PC+imm8   |  Rd = memory[PC+imm8]                     | ----  |
-| 1_0011_aaa_iii_ii_iii | STORE Ra, PC+imm8  |  memory[PC+imm8] = Ra                     | ----  |
-| 1_010_cccc_bbb_ii_iii | JC cond, Rb+imm5   |  if (cccc) PC = Rb + imm5                 | ----  |
-| 1_011_cccc_iii_ii_iii | JC cond, imm8      |  if (cccc) PC = PC + imm8                 | ----  |
-| 1_10_iiiii_iii_ii_iii | CALL imm13         |  R7=PC+1, PC = PC+imm13                   | ----  |
-| 1_11_iiiii_iii_ii_iii | JMP  imm13         |  PC = PC+imm13                            | ----  |
+| instruction code      | assembler          |  description                                   | flags |
+|-----------------------|--------------------|------------------------------------------------|-------|
+| 0_0000_aaa_bbb_mm_ddd | INC Rd, Ra, B      |  Rd = Rn + B (like ADD, but no flags changed)  | ----  |
+| 0_0001_aaa_bbb_mm_ddd | DEC Rd, Ra, B      |  Rd = Rn - B                                   | ----  |
+| 0_0010_000_bbb_mm_iii | WAIT B, i3         |  Wait until ((IBUS[i3] & B) == 0) == ZF        | ----  |
+| 0_0010_ddd_bbb_mm_iii | IN Rd, B, i3       |  Rd = IBUS[i3] & B, *(ddd != 000)*             | --Z-  |
+| 0_0011_aaa_bbb_mm_iii | OUT Ra, B, i3      |  IBUS[i3] = (IBUS[i3] & ~B)\|(Ra & B)          | ----  |
+| 0_0100_aaa_bbb_mm_ddd | ADD Rd, Ra, B      |  Rd = Rn + B                                   | VSZC  |
+| 0_0101_aaa_bbb_mm_ddd | ADC Rd, Ra, B      |  Rd = Rn + B + C                               | VSZC  |
+| 0_0110_aaa_bbb_mm_ddd | SUB Rd, Ra, B      |  Rd = Rn - B                                   | VSZC  |
+| 0_0111_aaa_bbb_mm_ddd | SBC Rd, Ra, B      |  Rd = Rn - B + 1 - C                           | VSZC  |
+| 0_1000_aaa_bbb_mm_ddd | AND Rd, Ra, B      |  Rd = Rn & B                                   | -SZ-  |
+| 0_1001_aaa_bbb_mm_ddd | ANN Rd, Ra, B      |  Rd = Rn & ~B                                  | -SZ-  |
+| 0_1010_aaa_bbb_mm_ddd | OR  Rd, Ra, B      |  Rd = Rn \| B                                  | -SZ-  |
+| 0_1011_aaa_bbb_mm_ddd | XOR Rd, Ra, B      |  Rd = Rn ^ B                                   | -SZ-  |
+| 0_1100_aaa_bbb_mm_ddd | MUU Rd, Ra, B      |  Rd = ((unsigned)Rn * (unsigned)B) >> 16       | -SZC  |
+| 0_1101_aaa_bbb_mm_ddd | MUL Rd, Ra, B      |  Rd = (Rn * B) >> 0                            | -SZC  |
+| 0_1110_aaa_bbb_mm_ddd | MSU Rd, Ra, B      |  Rd = ((signed)Rn * (unsigned)B) >> 16         | -SZC  |
+| 0_1111_aaa_bbb_mm_ddd | MSS Rd, Ra, B      |  Rd = ((signed)Rn * (signed)B) >> 16           | -SZC  |
+| 1_0000_ddd_bbb_ii_iii | LOAD Rd, Rb+imm5   |  Rd = memory[Rb+imm5]                          | ----  |
+| 1_0001_aaa_bbb_ii_iii | STORE Ra, Rb+imm5  |  memory[Rb+imm5] = Ra                          | ----  |
+| 1_0010_ddd_iii_ii_iii | LOAD Rd, PC+imm8   |  Rd = memory[PC+imm8]                          | ----  |
+| 1_0011_aaa_iii_ii_iii | STORE Ra, PC+imm8  |  memory[PC+imm8] = Ra                          | ----  |
+| 1_010_cccc_bbb_ii_iii | J_cond, Rb+imm5    |  if (cccc) PC = Rb + imm5                      | ----  |
+| 1_011_cccc_iii_ii_iii | J_cond, imm8       |  if (cccc) PC = PC + imm8                      | ----  |
+| 1_10_iiiii_iii_ii_iii | CALL imm13         |  R7=PC+1, PC = PC+imm13                        | ----  |
+| 1_11_iiiii_iii_ii_iii | JMP  imm13         |  PC = PC+imm13                                 | ----  |
 
 Instruction code fields:
 
@@ -159,4 +168,18 @@ Condition codes
 | 1101 | jle    | v != s \| z = 1 |  less or equal (signed compare)    |  <= |
 | 1110 | jg     | v = s & z = 0   |  greater (signed compare)          |  >  |
 | 1111 | jge    | v = s \| z = 1  |  less or equal (signed compare)    |  >= |
+
+Instruction aliases
+-------------------
+
+Specifying destination register to 0 in ALU operations allows to implement instructions which only setting flags as a result.
+
+| Alias instruction  | Implemented as | Description                             |
+|--------------------|----------------|-----------------------------------------|
+| NOP                | INC R0, R0, R0 | No operation, instruction code is 16'b0 |
+| MOV Rd, Ra         | INC Rd, Ra, R0 | Move value from one register to another |
+| CMP Ra, Rb         | SUB R0, Ra, B  | Compare two registers                   |
+| CMPC Ra, Rb        | SBC R0, Ra, B  | Compare two registers with carry        |
+
+
 
