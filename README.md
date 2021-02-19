@@ -7,12 +7,13 @@ RISC architecture, LOAD/STORE
 Fixed instruction width 16 bits
 8 general purpose 16-bit registers
 3-address ALU operations
-
+4-stage pipeline executing 4 threads (barrel CPU)
 Up to 64K x 16bit words of program/data address space
 Up to 128 bits of input and 128 bits ouput bus, atomic bit-masked access as 16-bit slices
-Special wait instructions to react on input signal change in one cycle
+Special wait instructions to react on input signal change in one cycle - emulation of interrupts
 
-
+Language: System Verilog
+License: GNU LGPL V2
 
 
 BCPU16 instruction set architecture
@@ -25,7 +26,7 @@ Registers
 
 8 x 16bit general purpose registers R0..R7
 R0 is readonly constant 0, writes ignored
-R7 is set to return address
+R7 is set to return address when CALL instruction is executed (acts as link register)
 Registers encoded inside instructions as 3-bit indexes (aaa,bbb,ddd)
 
 Program counter register PC, configurable width (10..16 bits)
@@ -42,10 +43,13 @@ Flags register: 4 flags
 Instruction types
 -----------------
 
-ALU instructions  (3-address: destination register, operand A register, operand B register or immediate constant)
-LOAD/STORE instructions (address modes: register + 5-bit offset, or PC + 8-bit offset)
-JUMP instructions (conditional jump address modes: register + 5-bit offset, or PC + 8-bit offset, CALL and JMP address mode: PC + 13-bit offset)
-I/O BUS instructions (write output bus bits, read input bus bits, wait for 0 or 1 on input bus)
+| Instruction type | Description | Number of instructions | Address modes |
+|------------------|-------------|------------------------|---------------|
+| ALU instructions | Arithmetic, logic, multiplication, barrel shifter emulated by multiplication | 12 | 3-address: destination register, operand A register, operand B register or immediate constant |
+| LOAD/STORE | Load from memory to register, store register to memory | 2 | register + 5-bit signed offset, PC + 8-bit signed offset |
+| Conditional jumps | Conditional jump based on flags (16 combinations) | 1 | register + 5-bit signed offset, PC + 8-bit signed offset |
+| JUMP and CALL | Jump relative to PC, for CALL stores return address in R7 (link register) | 2 | PC + 13-bit signed offset |
+| I/O BUS instructions | Write output bus bits, read input bus bits, wait for 0 or 1 on input bus | 3 | Bus address is 3 bits (8 16-bit slices) |
 
 
 Instructions table
@@ -56,15 +60,15 @@ Instructions table
 | 0_0000_aaa_bbb_mm_ddd | INC Rd, Ra, B      |  Rd = Rn + B                              | ----  |
 | 0_0001_aaa_bbb_mm_ddd | DEC Rd, Ra, B      |  Rd = Rn - B                              | ----  |
 | 0_0010_000_bbb_mm_iii | WAIT B, i3         |  Wait until ((IBUS[i3] & B) == 0) == ZF   | ----  |
-| 0_0010_ddd_bbb_mm_iii | IN Rd, B, i3       |  Rd = IBUS[i3] & B  (ddd != 000)          | --Z-  |
-| 0_0011_aaa_bbb_mm_iii | OUT Ra, B, i3      |  IBUS[i3] = (IBUS[i3] & ~B)\|(Ra & B)    | ----  |
+| 0_0010_ddd_bbb_mm_iii | IN Rd, B, i3       |  Rd = IBUS[i3] & B, *(ddd != 000)*        | --Z-  |
+| 0_0011_aaa_bbb_mm_iii | OUT Ra, B, i3      |  IBUS[i3] = (IBUS[i3] & ~B)\|(Ra & B)     | ----  |
 | 0_0100_aaa_bbb_mm_ddd | ADD Rd, Ra, B      |  Rd = Rn + B                              | VSZC  |
 | 0_0101_aaa_bbb_mm_ddd | ADC Rd, Ra, B      |  Rd = Rn + B + C                          | VSZC  |
 | 0_0110_aaa_bbb_mm_ddd | SUB Rd, Ra, B      |  Rd = Rn - B                              | VSZC  |
 | 0_0111_aaa_bbb_mm_ddd | SBC Rd, Ra, B      |  Rd = Rn - B + 1 - C                      | VSZC  |
 | 0_1000_aaa_bbb_mm_ddd | AND Rd, Ra, B      |  Rd = Rn & B                              | -SZ-  |
 | 0_1001_aaa_bbb_mm_ddd | ANN Rd, Ra, B      |  Rd = Rn & ~B                             | -SZ-  |
-| 0_1010_aaa_bbb_mm_ddd | OR  Rd, Ra, B      |  Rd = Rn \| B                            | -SZ-  |
+| 0_1010_aaa_bbb_mm_ddd | OR  Rd, Ra, B      |  Rd = Rn \| B                             | -SZ-  |
 | 0_1011_aaa_bbb_mm_ddd | XOR Rd, Ra, B      |  Rd = Rn ^ B                              | -SZ-  |
 | 0_1100_aaa_bbb_mm_ddd | MUU Rd, Ra, B      |  Rd = ((unsigned)Rn * (unsigned)B) >> 16  | -SZC  |
 | 0_1101_aaa_bbb_mm_ddd | MUL Rd, Ra, B      |  Rd = (Rn * B) >> 0                       | -SZC  |
@@ -96,6 +100,7 @@ Operand B for ALU and BUS operations
 ------------------------------------
 
 As operand B, register or table constant can be used.
+16 of 24 constants contain single bit set, the rest 8 contain several other useful values.
 
 | mm | bbb | B operand value     |  Description                    |
 |----|-----|---------------------|---------------------------------|
@@ -140,12 +145,12 @@ Condition codes
 |------|--------|-----------------|------------------------------------|-----|
 | 0000 | jmp    | 1               |  unconditional                     |     |
 | 0001 | jnc    | c = 0           |  for C==1 test, use JB code        |     |
-| 0010 | jnz    | z = 0           |  jne                               | !=  |
-| 0011 | jz     | z = 1           |  je                                | ==  |
-| 0100 | jns    | s = 0           |                                    |     |
-| 0101 | js     | s = 1           |                                    |     |
-| 0110 | jno    | v = 0           |                                    |     |
-| 0111 | jo     | v = 1           |                                    |     |
+| 0010 | jnz    | z = 0           |  not equal (jne)                   | !=  |
+| 0011 | jz     | z = 1           |  equal (je)                        | ==  |
+| 0100 | jns    | s = 0           |  sign is 0                         |     |
+| 0101 | js     | s = 1           |  sign is 1                         |     |
+| 0110 | jno    | v = 0           |  no overflow                       |     |
+| 0111 | jo     | v = 1           |  overflow                          |     |
 | 1000 | ja     | c = 0 & z = 0   |  above (unsigned compare)          |  >  |
 | 1001 | jae    | c = 0 \| z = 1  |  above or equal (unsigned compare) |  >= |
 | 1010 | jb, jc | c = 1           |  below (unsigned compare)          |  <  |
