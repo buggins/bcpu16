@@ -4,7 +4,9 @@ BCPU16
 This is small but powerful MCU softcore for using inside FPGA.
 
 **Language: System Verilog**
+
 **License: GNU LGPL V2**
+
 **Platform: Xilinx Series 7 FPGA, but may be ported to other platforms**
 
 **Main features:**
