@@ -1,0 +1,29 @@
+	.arch bcpu16
+
+	.org 0
+
+	JMP THREAD1_START
+
+
+	.org 4
+
+	JMP THREAD2_START
+
+	.org 8
+
+	JMP THREAD3_START
+
+	.org 12
+
+	JMP THREAD4_START
+
+
+THREAD1_START:
+        MOV R2, R0
+        MOV R3, 0x3445
+
+THREAD2_START:
+
+THREAD3_START:
+
+THREAD4_START:
