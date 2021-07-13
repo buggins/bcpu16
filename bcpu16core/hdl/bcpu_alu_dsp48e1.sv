@@ -38,6 +38,8 @@ Instructions table
 
 import bcpu_defs::*;
 
+`define DEBUG_bcpu_alu_dsp48e1
+
 module bcpu_alu_dsp48e1
 #(
     parameter DATA_WIDTH = 16
@@ -70,76 +72,108 @@ module bcpu_alu_dsp48e1
     
     // alu result output         - delayed by 3 clock cycles from inputs
     output logic [DATA_WIDTH-1 : 0] ALU_OUT
+    
+`ifdef DEBUG_bcpu_alu_dsp48e1
+    , output logic [47:0] debug_dsp_p_out
+`endif    
 );
 
-// buffer all inputs
-logic [DATA_WIDTH-1:0] a_in_reg;
-//logic [DATA_WIDTH-1:0] b_in_reg;
-logic [3:0] alu_op_reg;
-logic alu_en_reg;
-logic [3:0] flags_in_reg;
+//                ALUOP_MUL:    flags_update_mask_stage1 <= 4'b0000; //    = 4'b1100, //   RC = low(RA * RB)                            .SZ.       SHL, SAL
+//                ALUOP_MULHUU: flags_update_mask_stage1 <= 4'b0000; //    = 4'b1101, //   RC = high(unsigned RA * unsigned RB)         .SZ.       SHR
+//                ALUOP_MULHSS: flags_update_mask_stage1 <= 4'b0000; //    = 4'b1110, //   RC = high(signed RA * signed RB)             .SZ.
+//                ALUOP_MULHSU: flags_update_mask_stage1 <= 4'b0000; //    = 4'b1111  //   RC = high(signed RA * unsigned RB)           .SZ.       SAR
 
+logic alu_en_stage1; // ALU_EN delayed by 1 cycle
+logic alu_en_stage2; // ALU_EN delayed by 2 cycle
+logic alu_en_stage3; // ALU_EN delayed by 3 cycles
 always_ff @(posedge CLK) begin
     if (RESET) begin
-        a_in_reg <= 'b0;
-//        b_in_reg <= 'b0;
-        flags_in_reg <= 'b0;
-        alu_op_reg <= 'b0;
-        alu_en_reg <= 'b0;
+        alu_en_stage1 <= 0;
+        alu_en_stage2 <= 0;
+        alu_en_stage3 <= 0;
     end else if (CE) begin
+        alu_en_stage3 <= alu_en_stage2;
+        alu_en_stage2 <= alu_en_stage1;
+        alu_en_stage1 <= ALU_EN;
+    end
+end 
+logic ce_stage0;
+always_comb ce_stage0 <= CE & ALU_EN;
+logic ce_stage1;
+always_comb ce_stage1 <= CE & alu_en_stage1;
+logic ce_stage2;
+always_comb ce_stage2 <= CE & alu_en_stage2;
+logic ce_stage3;
+always_comb ce_stage3 <= CE & alu_en_stage3;
+
+// buffer A input
+logic [DATA_WIDTH-1:0] a_in_reg;
+always_ff @(posedge CLK) begin
+    if (RESET) begin
+        a_in_reg <= 0;
+    end else if (ce_stage0) begin
         a_in_reg <= A_IN;
-//        b_in_reg <= B_IN;
-        flags_in_reg <= FLAGS_IN;
+    end
+end
+
+
+logic [3:0] alu_op_reg;
+always_ff @(posedge CLK) begin
+    if (RESET) begin
+        alu_op_reg <= 'b0;
+    end else if (ce_stage0) begin
         alu_op_reg <= ALU_OP;
-        alu_en_reg <= ALU_EN;
     end
 end
 
 // two additional pipeline stages for storing of flags 
-logic [3:0] flags_in_stage1;
-logic [3:0] flags_in_stage2;
+logic [3:0] flags_stage1;
+logic [3:0] flags_stage2;
+logic [3:0] flags_stage3;
 always_ff @(posedge CLK) begin
     if (RESET) begin
-        flags_in_stage1 <= 'b0;
-        flags_in_stage2 <= 'b0;
+        flags_stage1 <= 0;
+        flags_stage2 <= 0;
+        flags_stage3 <= 0;
     end else if (CE) begin
-        flags_in_stage2 <= flags_in_stage1;
-        flags_in_stage1 <= flags_in_reg;
+        flags_stage3 <= flags_stage2;
+        flags_stage2 <= flags_stage1;
+        flags_stage1 <= FLAGS_IN;
     end
 end
 
 // Flags update mask
-logic [3:0] flags_update_mask_stage1;
 logic [3:0] flags_update_mask_stage2;
+logic [3:0] flags_update_mask_stage3;
 always_ff @(posedge CLK) begin
     if (RESET) begin
-        flags_update_mask_stage1 <= 'b0;
         flags_update_mask_stage2 <= 'b0;
+        flags_update_mask_stage3 <= 'b0;
     end else if (CE) begin
-        flags_update_mask_stage2 <= flags_update_mask_stage1;
-        if (~alu_en_reg) begin
-            flags_update_mask_stage1 <= 'b0;
+        flags_update_mask_stage3 <= flags_update_mask_stage2;
+        if (~alu_en_stage1) begin
+            flags_update_mask_stage2 <= 'b0;
         end else begin
             case (alu_op_reg)
-                ALUOP_INC:    flags_update_mask_stage1 <= 4'b0000; //    = 4'b0000, //   RC = RA + RB                                 ....       MOV, NOP
-                ALUOP_DEC:    flags_update_mask_stage1 <= 4'b0000; //    = 4'b0001, //   RC = RA - RB                                 ....
-                ALUOP_RES0:   flags_update_mask_stage1 <= 4'b0000; //    = 4'b0010, //   reserved                                     ....
-                ALUOP_RES1:   flags_update_mask_stage1 <= 4'b0000; //    = 4'b0011, //   reserved                                     ....
+                ALUOP_INC:    flags_update_mask_stage2 <= 4'b0000; //    = 4'b0000, //   RC = RA + RB                                 ....       MOV, NOP
+                ALUOP_DEC:    flags_update_mask_stage2 <= 4'b0000; //    = 4'b0001, //   RC = RA - RB                                 ....
+                ALUOP_RES0:   flags_update_mask_stage2 <= 4'b0000; //    = 4'b0010, //   reserved                                     ....
+                ALUOP_RES1:   flags_update_mask_stage2 <= 4'b0000; //    = 4'b0011, //   reserved                                     ....
             
-                ALUOP_ADD:    flags_update_mask_stage1 <= 4'b1111; //    = 4'b0100, //   RC = RA + RB                                 VSZC
-                ALUOP_SUB:    flags_update_mask_stage1 <= 4'b1111; //    = 4'b0101, //   RC = RA - RB                                 VSZC       CMP
-                ALUOP_ADDC:   flags_update_mask_stage1 <= 4'b1111; //    = 4'b0110, //   RC = RA + RB + CF                            VSZC
-                ALUOP_SUBC:   flags_update_mask_stage1 <= 4'b1111; //    = 4'b0111, //   RC = RA - RB - CF                            VSZC       CMPC
+                ALUOP_ADD:    flags_update_mask_stage2 <= 4'b1111; //    = 4'b0100, //   RC = RA + RB                                 VSZC
+                ALUOP_SUB:    flags_update_mask_stage2 <= 4'b1111; //    = 4'b0101, //   RC = RA - RB                                 VSZC       CMP
+                ALUOP_ADDC:   flags_update_mask_stage2 <= 4'b1111; //    = 4'b0110, //   RC = RA + RB + CF                            VSZC
+                ALUOP_SUBC:   flags_update_mask_stage2 <= 4'b1111; //    = 4'b0111, //   RC = RA - RB - CF                            VSZC       CMPC
                 
-                ALUOP_AND:    flags_update_mask_stage1 <= 4'b0110; //    = 4'b1000, //   RC = RA & RB                                 .SZ.
-                ALUOP_XOR:    flags_update_mask_stage1 <= 4'b0110; //    = 4'b1001, //   RC = RA ^ RB                                 .SZ.
-                ALUOP_OR:     flags_update_mask_stage1 <= 4'b0110; //    = 4'b1010, //   RC = RA | RB                                 .SZ.
-                ALUOP_ANDN:   flags_update_mask_stage1 <= 4'b0110; //    = 4'b1011, //   RC = RA & ~RB                                .SZ.
+                ALUOP_AND:    flags_update_mask_stage2 <= 4'b0110; //    = 4'b1000, //   RC = RA & RB                                 .SZ.
+                ALUOP_XOR:    flags_update_mask_stage2 <= 4'b0110; //    = 4'b1001, //   RC = RA ^ RB                                 .SZ.
+                ALUOP_OR:     flags_update_mask_stage2 <= 4'b0110; //    = 4'b1010, //   RC = RA | RB                                 .SZ.
+                ALUOP_ANDN:   flags_update_mask_stage2 <= 4'b0110; //    = 4'b1011, //   RC = RA & ~RB                                .SZ.
                 
-                ALUOP_MUL:    flags_update_mask_stage1 <= 4'b0000; //    = 4'b1100, //   RC = low(RA * RB)                            .SZ.       SHL, SAL
-                ALUOP_MULHUU: flags_update_mask_stage1 <= 4'b0000; //    = 4'b1101, //   RC = high(unsigned RA * unsigned RB)         .SZ.       SHR
-                ALUOP_MULHSS: flags_update_mask_stage1 <= 4'b0000; //    = 4'b1110, //   RC = high(signed RA * signed RB)             .SZ.
-                ALUOP_MULHSU: flags_update_mask_stage1 <= 4'b0000; //    = 4'b1111  //   RC = high(signed RA * unsigned RB)           .SZ.       SAR
+                ALUOP_MUL:    flags_update_mask_stage2 <= 4'b0000; //    = 4'b1100, //   RC = low(RA * RB)                            .SZ.       SHL, SAL
+                ALUOP_MULHUU: flags_update_mask_stage2 <= 4'b0000; //    = 4'b1101, //   RC = high(unsigned RA * unsigned RB)         .SZ.       SHR
+                ALUOP_MULHSS: flags_update_mask_stage2 <= 4'b0000; //    = 4'b1110, //   RC = high(signed RA * signed RB)             .SZ.
+                ALUOP_MULHSU: flags_update_mask_stage2 <= 4'b0000; //    = 4'b1111  //   RC = high(signed RA * unsigned RB)           .SZ.       SAR
             endcase
         end
             
@@ -176,6 +210,10 @@ logic [47:0] dsp_c_in; // 48-bit C data input
 logic [24:0] dsp_d_in; // 25-bit D data input
 // data output
 logic [47:0] dsp_p_out; // 48-bit P data output
+
+logic dsp_overflow;
+logic dsp_underflow;
+
 logic[3:0] dsp_carryout;                // 7-bit input: Operation mode input
 logic dsp_patterndetect;          // 1-bit output: Pattern detect output   (1 when P[17:0] == 18'b0)
 logic dsp_patternbdetect;         // 1-bit output: Pattern detect output   (1 when P[17:0] == 18'h3ffff)
@@ -225,18 +263,25 @@ assign dsp_inmode = DSP_INMODE_B1_D;
 logic adder_op_is_subtract;
 logic carry_in;
 always_comb adder_op_is_subtract <= (alu_op_reg==ALUOP_SUB) || (alu_op_reg==ALUOP_SUBC) || (alu_op_reg==ALUOP_DEC);
-always_comb carry_in <= ((alu_op_reg==ALUOP_ADDC) || (alu_op_reg==ALUOP_SUBC)) ? flags_in_reg[FLAG_C] : 1'b0;
+always_comb carry_in <=
+    (alu_op_reg==ALUOP_ADDC) ? flags_stage1[FLAG_C]
+    : (alu_op_reg==ALUOP_SUBC) ? ~flags_stage1[FLAG_C]
+    : (alu_op_reg==ALUOP_SUB || alu_op_reg==ALUOP_DEC) ? 1'b1
+    : 1'b0;
+//((alu_op_reg==ALUOP_ADDC) || (alu_op_reg==ALUOP_SUBC)) ? flags_stage1[FLAG_C] : 1'b0;
 
 always_comb dsp_carry_in <= carry_in ^ adder_op_is_subtract; // invert carry in for subtract
 
 logic d_signex;  
 logic b_signex;  
-always_comb d_signex <= A_IN[DATA_WIDTH-1] & (ALU_OP == ALUOP_MULHSS || ALU_OP == ALUOP_MULHSU);  
-always_comb b_signex <= B_IN[DATA_WIDTH-1] & (ALU_OP == ALUOP_MULHSS);  
+logic b_signex1;  
+always_comb d_signex <= A_IN[DATA_WIDTH-1] & (alu_op_reg == ALUOP_MULHSS || alu_op_reg == ALUOP_MULHSU);  
+always_comb b_signex <= B_IN[DATA_WIDTH-1] & (alu_op_reg == ALUOP_MULHSS);  
+always_comb b_signex1 <= B_IN[DATA_WIDTH-1] & (alu_op_reg == ALUOP_MULHSS || alu_op_reg[3:2] != 2'b11);  
 
-assign dsp_c_in = { {48-DATA_WIDTH{1'b0}},          a_in_reg};     // add/subtract operand 1 C
-assign dsp_d_in = { {25-DATA_WIDTH{d_signex}},          A_IN};    // multiplier 1
-assign dsp_b_in = { {18-DATA_WIDTH{b_signex}},          B_IN};    // multiplier 2, A:B add/subtract operand 2
+assign dsp_c_in = { {48-DATA_WIDTH-1{1'b0}},   a_in_reg[DATA_WIDTH-1], a_in_reg};    // add/subtract operand 1 C
+assign dsp_d_in = { {25-DATA_WIDTH{d_signex}},               A_IN};    // multiplier 1
+assign dsp_b_in = { {18-DATA_WIDTH-1{b_signex}}, b_signex1,  B_IN};    // multiplier 2, A:B add/subtract operand 2
 assign dsp_a_in = 'b0;                                            // sign only: top part of A:B for add/subtract operand 2  
 
 
@@ -287,12 +332,12 @@ always_comb ALU_OUT <= result_mux_index_stage2
 // output flags
 logic [3:0] new_flags;
 always_comb
-     FLAGS_OUT <= (new_flags & flags_update_mask_stage2) 
-                | (flags_in_stage2 & ~flags_update_mask_stage2);
+     FLAGS_OUT <= (new_flags & flags_update_mask_stage3) 
+                | (flags_stage3 & ~flags_update_mask_stage3);
 
-always_comb new_flags[FLAG_Z] <= dsp_patterndetect;                               // 1 when all bits of result are 0 
+always_comb new_flags[FLAG_Z] <= dsp_patterndetect; //~dsp_patterndetect;                               // 1 when all bits of result are 0 
 always_comb new_flags[FLAG_S] <= dsp_p_out[DATA_WIDTH-1];                         // upper bit is sign
-always_comb new_flags[FLAG_C] <= dsp_p_out[DATA_WIDTH];                           // carry out
+always_comb new_flags[FLAG_C] <= dsp_p_out[DATA_WIDTH+1];                           // carry out
 always_comb new_flags[FLAG_V] <= dsp_p_out[DATA_WIDTH-1] ^ dsp_p_out[DATA_WIDTH]; // overflow
 
 
@@ -310,7 +355,7 @@ DSP48E1 #(
     .USE_SIMD("ONE48"),               // SIMD selection ("ONE48", "TWO24", "FOUR12")
     // Pattern Detector Attributes: Pattern Detection Configuration
     .AUTORESET_PATDET("NO_RESET"),    // "NO_RESET", "RESET_MATCH", "RESET_NOT_MATCH" 
-    .MASK(48'h00000000ffff),          // 48-bit mask value for pattern detect (1=ignore)
+    .MASK(48'hffffffff0000),          // 48-bit mask value for pattern detect (1=ignore)
     .PATTERN(48'h000000000000),       // 48-bit pattern match for pattern detect
     .SEL_MASK("MASK"),                // "C", "MASK", "ROUNDING_MODE1", "ROUNDING_MODE2" 
     .SEL_PATTERN("PATTERN"),          // Select pattern value ("PATTERN" or "C")
@@ -339,10 +384,10 @@ DSP48E1_inst (
     .MULTSIGNOUT(),             // 1-bit output: Multiplier sign cascade output
     .PCOUT(),                   // 48-bit output: Cascade output
     // Control: 1-bit (each) output: Control Inputs/Status Bits
-    .OVERFLOW(),                // 1-bit output: Overflow in add/acc output
+    .OVERFLOW(dsp_overflow),                // 1-bit output: Overflow in add/acc output
     .PATTERNBDETECT(dsp_patternbdetect), // 1-bit output: Pattern bar detect output
     .PATTERNDETECT(dsp_patterndetect),   // 1-bit output: Pattern detect output
-    .UNDERFLOW(),               // 1-bit output: Underflow in add/acc output
+    .UNDERFLOW(dsp_underflow),               // 1-bit output: Underflow in add/acc output
     // Data: 4-bit (each) output: Data Ports
     .CARRYOUT(dsp_carryout),    // 4-bit output: Carry output
     .P(dsp_p_out),              // 48-bit output: Primary data output
@@ -365,19 +410,19 @@ DSP48E1_inst (
     .CARRYIN(dsp_carry_in),        // 1-bit input: Carry input signal
     .D(dsp_d_in),                           // 25-bit input: D data input
     // Reset/Clock Enable: 1-bit (each) input: Reset/Clock Enable Inputs
-    .CEA1(dsp_ce),                         // 1-bit input: Clock enable input for 1st stage AREG
-    .CEA2(dsp_ce),                         // 1-bit input: Clock enable input for 2nd stage AREG
+    .CEA1(ce_stage0),                         // 1-bit input: Clock enable input for 1st stage AREG
+    .CEA2(ce_stage1),                         // 1-bit input: Clock enable input for 2nd stage AREG
     .CEAD(),                         // 1-bit input: Clock enable input for ADREG
-    .CEALUMODE(dsp_ce),                    // 1-bit input: Clock enable input for ALUMODE
-    .CEB1(dsp_ce),                         // 1-bit input: Clock enable input for 1st stage BREG
-    .CEB2(dsp_ce),                         // 1-bit input: Clock enable input for 2nd stage BREG
-    .CEC(dsp_ce),                          // 1-bit input: Clock enable input for CREG
-    .CECARRYIN(dsp_ce),                    // 1-bit input: Clock enable input for CARRYINREG
-    .CECTRL(dsp_ce),                       // 1-bit input: Clock enable input for OPMODEREG and CARRYINSELREG
-    .CED(dsp_ce),                                // 1-bit input: Clock enable input for DREG
+    .CEALUMODE(ce_stage1),                    // 1-bit input: Clock enable input for ALUMODE
+    .CEB1(ce_stage0),                         // 1-bit input: Clock enable input for 1st stage BREG
+    .CEB2(ce_stage1),                         // 1-bit input: Clock enable input for 2nd stage BREG
+    .CEC(ce_stage1),                          // 1-bit input: Clock enable input for CREG
+    .CECARRYIN(ce_stage1),                    // 1-bit input: Clock enable input for CARRYINREG
+    .CECTRL(ce_stage1),                       // 1-bit input: Clock enable input for OPMODEREG and CARRYINSELREG
+    .CED(ce_stage0),                                // 1-bit input: Clock enable input for DREG
     .CEINMODE(),                           // 1-bit input: Clock enable input for INMODEREG
-    .CEM(dsp_ce),                          // 1-bit input: Clock enable input for MREG
-    .CEP(dsp_ce),                          // 1-bit input: Clock enable input for PREG
+    .CEM(ce_stage1),                          // 1-bit input: Clock enable input for MREG
+    .CEP(ce_stage2),                          // 1-bit input: Clock enable input for PREG
     // reset
     .RSTA(dsp_reset),                      // 1-bit input: Reset input for AREG
     .RSTALLCARRYIN(dsp_reset),             // 1-bit input: Reset input for CARRYINREG
@@ -391,5 +436,11 @@ DSP48E1_inst (
     .RSTP(dsp_reset)                       // 1-bit input: Reset input for PREG
 );
 // End of DSP48E1_inst instantiation
+
+
+`ifdef DEBUG_bcpu_alu_dsp48e1
+    always_comb debug_dsp_p_out <= dsp_p_out;
+`endif    
+
 
 endmodule

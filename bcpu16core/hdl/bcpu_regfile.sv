@@ -6,17 +6,22 @@
     License: LGPL v2
     Language: System Verilog
     Compatibility: universal
+
     Resources: 24 LUTs as distributed RAM on Xilinx Series 7 FPGA
 
     Module bcpu_regfile implements 8 regs * 16 bits * 4 threads, 
-    dual read ports, single write port, 
-    async read, sync write register file.
+
+    dual read ports, single write port,
+     
+    async read, sync write
 */
 
 module bcpu_regfile
 #(
-    parameter DATA_WIDTH = 16,     // 16, 17, 18
-    parameter REG_ADDR_WIDTH = 5   // 2^3 regs * 2^2 threads = 5 bits for 32 registers addressing 
+    // 16, 17, 18
+    parameter DATA_WIDTH = 16,     
+    // 2^3 regs * 2^2 threads = 5 bits for 32 registers addressing
+    parameter REG_ADDR_WIDTH = 5    
 )
 (
     // input clock: write operation is done synchronously using this clock
@@ -50,7 +55,7 @@ logic [DATA_WIDTH-1:0] memory[MEMSIZE] = {
                             0, 0, 0, 0, 0, 0, 0, 0 
                         };
 
-// one channe for synchronous write
+// one channel for synchronous write
 always_ff @(posedge CLK)
     if (REG_WR_EN)
         memory[WR_REG_ADDR] <= WR_REG_DATA;
