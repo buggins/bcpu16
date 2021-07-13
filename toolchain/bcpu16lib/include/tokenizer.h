@@ -14,6 +14,8 @@ enum bcpu16_asm_token_t {
     TOKEN_NUMBER,    // number constant
     TOKEN_COMMA,     // ,
     TOKEN_COLON,     //  :
+    TOKEN_WHITESPACE,
+    TOKEN_COMMENT,
 };
 
 enum bcpu16_asm_instr_t {
@@ -61,6 +63,15 @@ public:
     Token(const Token & v) : type(v.type), id(v.id), str(v.str), intValue(v.intValue), srcLine(v.srcLine), srcPos(v.srcPos) {
 
     }
+    Token * setWhitespace() {
+        type = TOKEN_WHITESPACE;
+    }
+    Token * setEol() {
+        type = TOKEN_EOL;
+    }
+    Token * setComment() {
+        type = TOKEN_EOL;
+    }
     Token * setSource(SourceLine * line, int pos) {
         srcLine = line;
         srcPos = pos;
@@ -93,17 +104,48 @@ private:
     int line;
     SourceLine * currentLine;
     int currentLinePos;
+    std::string currentLineText;
+    int currentLineLen;
 public:
-    Tokenizer() : f(nullptr), line(0), currentLine(nullptr), currentLinePos(0) {
+    Tokenizer() : f(nullptr), line(0), currentLine(nullptr), currentLinePos(0), currentLineLen(0) {
 
+    }
+    void updateLine() {
+        if (f->lineCount() > 0) {
+            currentLine = f->line(0);
+            currentLineText = currentLine->getText();
+        }
+        else {
+            currentLine = nullptr;
+            currentLineText.clear();
+        }
+        currentLinePos = 0;
+        currentLineLen = currentLineText.length();
     }
     void init(SourceFile * file) {
         f = file;
         line = 0;
-        currentLine = f->line(0);
-        currentLinePos = 0;
+        updateLine();
+    }
+    Token * newToken() {
+        Token * tok = new Token();
+        tok->setSource(currentLine, currentLinePos);
+        return tok;
+    }
+    Token * nextLine() {
+        Token * tok = newToken()->setEol();
+        line++;
+        updateLine();
+        return tok;
     }
     Token * nextToken() {
+        if (line >= f->lineCount()) {
+            return nullptr;
+        }
+        if (currentLinePos >= currentLineText.length()) {
+            // return EOL token, and move to next line
+            return nextLine();
+        }
         return nullptr;
     }
 };
