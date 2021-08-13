@@ -1,28 +1,13 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-// Company: 
-// Engineer: 
-// 
-// Create Date: 02/21/2020 11:18:56 AM
-// Design Name: 
-// Module Name: ref_frequency_gen_tb
-// Project Name: 
-// Target Devices: 
-// Tool Versions: 
-// Description: 
-// 
-// Dependencies: 
-// 
-// Revision:
-// Revision 0.01 - File Created
-// Additional Comments:
-// 
-//////////////////////////////////////////////////////////////////////////////////
+/*
 
+    BCPU16 DSP48E1 ALU testbench.
+
+*/
 
 import bcpu_defs::*;
 
-`define DEBUG_bcpu_alu_dsp48e1
+//`define DEBUG_bcpu_alu_dsp48e1
 
 module bcpu_alu_dsp48e1_tb(
 
@@ -303,6 +288,7 @@ initial begin
     pauseAluOp();
     startNonAluOp(4'b1111);                           checkAluOpResult((1234*5678)>>16, 4'b1111);
     startNonAluOp(4'b1010);                           checkAluOpResult(100-200-1, 4'b0101);
+    $display("Testing ALU flags pipeline");
     @(posedge CLK) #1                                 checkFlags(4'b0101);  
     pauseAluOp();
     @(posedge CLK) #1                                 checkFlags(4'b1111);

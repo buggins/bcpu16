@@ -6,7 +6,7 @@
     Language: System Verilog
     Compatibility: Xilinx Series 7
     Resources: 
-            22 LUTs, 1 DSP
+            27 LUTs, 1 DSP
             
     Module bcpu_alu_dsp48e1 contains implementation of ALU
     
@@ -29,16 +29,16 @@ Instructions table
 | 0_1001_aaa_bbb_mm_ddd | ANN Rd, Ra, B      |  Rd = Rn & ~B                                     | -SZ-  |
 | 0_1010_aaa_bbb_mm_ddd | OR  Rd, Ra, B      |  Rd = Rn \| B                                     | -SZ-  |
 | 0_1011_aaa_bbb_mm_ddd | XOR Rd, Ra, B      |  Rd = Rn ^ B                                      | -SZ-  |
-| 0_1100_aaa_bbb_mm_ddd | MUU Rd, Ra, B      |  Rd = ((unsigned)Rn * (unsigned)B) >> 16          | -SZC  |
-| 0_1101_aaa_bbb_mm_ddd | MUL Rd, Ra, B      |  Rd = (Rn * B) >> 0                               | -SZC  |
-| 0_1110_aaa_bbb_mm_ddd | MSU Rd, Ra, B      |  Rd = ((signed)Rn * (unsigned)B) >> 16            | -SZC  |
-| 0_1111_aaa_bbb_mm_ddd | MSS Rd, Ra, B      |  Rd = ((signed)Rn * (signed)B) >> 16              | -SZC  |
+| 0_1100_aaa_bbb_mm_ddd | MUU Rd, Ra, B      |  Rd = ((unsigned)Rn * (unsigned)B) >> 16          | ----  |
+| 0_1101_aaa_bbb_mm_ddd | MUL Rd, Ra, B      |  Rd = (Rn * B) >> 0                               | ----  |
+| 0_1110_aaa_bbb_mm_ddd | MSU Rd, Ra, B      |  Rd = ((signed)Rn * (unsigned)B) >> 16            | ----  |
+| 0_1111_aaa_bbb_mm_ddd | MSS Rd, Ra, B      |  Rd = ((signed)Rn * (signed)B) >> 16              | ----  |
     
 */
 
 import bcpu_defs::*;
 
-`define DEBUG_bcpu_alu_dsp48e1
+//`define DEBUG_bcpu_alu_dsp48e1
 
 module bcpu_alu_dsp48e1
 #(
@@ -78,21 +78,13 @@ module bcpu_alu_dsp48e1
 `endif    
 );
 
-//                ALUOP_MUL:    flags_update_mask_stage1 <= 4'b0000; //    = 4'b1100, //   RC = low(RA * RB)                            .SZ.       SHL, SAL
-//                ALUOP_MULHUU: flags_update_mask_stage1 <= 4'b0000; //    = 4'b1101, //   RC = high(unsigned RA * unsigned RB)         .SZ.       SHR
-//                ALUOP_MULHSS: flags_update_mask_stage1 <= 4'b0000; //    = 4'b1110, //   RC = high(signed RA * signed RB)             .SZ.
-//                ALUOP_MULHSU: flags_update_mask_stage1 <= 4'b0000; //    = 4'b1111  //   RC = high(signed RA * unsigned RB)           .SZ.       SAR
-
 logic alu_en_stage1; // ALU_EN delayed by 1 cycle
 logic alu_en_stage2; // ALU_EN delayed by 2 cycle
-logic alu_en_stage3; // ALU_EN delayed by 3 cycles
 always_ff @(posedge CLK) begin
     if (RESET) begin
         alu_en_stage1 <= 0;
         alu_en_stage2 <= 0;
-        alu_en_stage3 <= 0;
     end else if (CE) begin
-        alu_en_stage3 <= alu_en_stage2;
         alu_en_stage2 <= alu_en_stage1;
         alu_en_stage1 <= ALU_EN;
     end
@@ -103,15 +95,13 @@ logic ce_stage1;
 always_comb ce_stage1 <= CE & alu_en_stage1;
 logic ce_stage2;
 always_comb ce_stage2 <= CE & alu_en_stage2;
-logic ce_stage3;
-always_comb ce_stage3 <= CE & alu_en_stage3;
 
 // buffer A input
 logic [DATA_WIDTH-1:0] a_in_reg;
 always_ff @(posedge CLK) begin
     if (RESET) begin
         a_in_reg <= 0;
-    end else if (ce_stage0) begin
+    end else if (CE) begin // CE instead of ce_stage0 to merge A reg with other modules 
         a_in_reg <= A_IN;
     end
 end
@@ -126,7 +116,7 @@ always_ff @(posedge CLK) begin
     end
 end
 
-// two additional pipeline stages for storing of flags 
+// pipeline registers for storing of flags 
 logic [3:0] flags_stage1;
 logic [3:0] flags_stage2;
 logic [3:0] flags_stage3;
@@ -313,10 +303,12 @@ always_comb
     endcase 
 
 
-// output value
-always_comb ALU_OUT <= result_mux_index_stage2 
+logic [DATA_WIDTH-1:0] result_mux;
+// output value : lower or higher (for multiply / high) half of result
+always_comb result_mux <= result_mux_index_stage2 
             ? dsp_p_out[DATA_WIDTH*2-1:DATA_WIDTH]   // higher half 
             : dsp_p_out[DATA_WIDTH-1:0];             // lower half
+always_comb ALU_OUT <= result_mux;
 
 // this is the same as previous commented out statement
 // alternative MUX impl: attempt to have 8xLUT5 instead of 16xLUT3
@@ -335,9 +327,9 @@ always_comb
      FLAGS_OUT <= (new_flags & flags_update_mask_stage3) 
                 | (flags_stage3 & ~flags_update_mask_stage3);
 
-always_comb new_flags[FLAG_Z] <= dsp_patterndetect; //~dsp_patterndetect;                               // 1 when all bits of result are 0 
+always_comb new_flags[FLAG_Z] <= dsp_patterndetect; // 1 when all bits of lower half of result are 0 
 always_comb new_flags[FLAG_S] <= dsp_p_out[DATA_WIDTH-1];                         // upper bit is sign
-always_comb new_flags[FLAG_C] <= dsp_p_out[DATA_WIDTH+1];                           // carry out
+always_comb new_flags[FLAG_C] <= dsp_p_out[DATA_WIDTH+1];                         // carry out
 always_comb new_flags[FLAG_V] <= dsp_p_out[DATA_WIDTH-1] ^ dsp_p_out[DATA_WIDTH]; // overflow
 
 
